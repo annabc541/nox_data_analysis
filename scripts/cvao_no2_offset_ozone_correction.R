@@ -10,10 +10,14 @@ Sys.setenv(TZ = "UTC")
 nox = read.csv("output/data/cvao_nox_offset_corr.csv") %>% 
   mutate(date = ymd_hms(date))
 
+nox_hourly = nox %>% 
+  timeAverage("1 hour") %>% 
+  filter(date >= "2017-01-01")
+
 met_data = read.csv("~/Cape Verde/20240507_CV_merge.csv") %>% 
-  mutate(date = ymd_hms(date),
+  mutate(date = dmy_hm(date),
          date = round_date(date, "1 hour")) %>% 
-  filter(date > "2016-12-31 23:59") %>% 
+  # filter(date > "2016-12-31 23:59") %>% 
   select(date,ws,wd,o3_ppb = O3_ppbV)
 
 # Ozone correction --------------------------------------------------------
@@ -52,14 +56,16 @@ write.csv(dat_to_save,"output/data/cvao_nox_offset_ozone_corr.csv",row.names = F
 # Plotting ----------------------------------------------------------------
 
 dat_corr_flagged %>%
-  timeAverage("1 day") %>% 
-  pivot_longer(c(no2_corr,no2_corr_o3_corr)) %>%
+  filter(date >= "2024-01-01") %>% 
+  # timeAverage("1 day") %>% 
+  # pivot_longer(c(no2_corr,no2_corr_o3_corr)) %>%
   mutate(year = year(date),
-         value = ifelse(local_pollution == 0,value,NA_real_)) %>%
-  ggplot(aes(date,value,col = name)) +
+         no_corr = ifelse(local_pollution == 0,no_corr,NA_real_)) %>%
+  ggplot(aes(date,no_corr)) +
   geom_path() +
   # facet_grid(rows = vars(name),scales = "free") +
-  ylim(-30,200)
+  # ylim(-30,200) +
+  NULL
 
 
 myOutput = timeVariation(dat_corr_flagged,pollutant = c("diff"),group = "year")

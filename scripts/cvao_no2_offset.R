@@ -12,7 +12,7 @@ nox2017 = read.csv("~/Cape Verde/nox/processing/processed_data/NOx_2017_calc_df_
   tibble() %>%
   mutate(date = ymd_hms(X),
          date = round_date(date,"5 min")) %>%
-  filter(date > "2017-01-01 00:00" & date < "2018-01-01 00:00") %>%
+  # filter(date > "2017-01-01 00:00" & date < "2018-01-01 00:00") %>%
   select(date,
          no_uncorrected = NO_Conc,
          no2_blc_uncorrected = NO2_Conc,
@@ -27,7 +27,7 @@ nox2018 = read.csv("~/Cape Verde/nox/processing/processed_data/NOx_2018_calc_df_
   tibble() %>%
   mutate(date = ymd_hms(X),
          date = round_date(date,"5 min")) %>%
-  filter(date > "2018-01-01 00:00" & date < "2019-01-01 00:00") %>%
+  # filter(date > "2018-01-01 00:00" & date < "2019-01-01 00:00") %>%
   select(date,
          no_uncorrected = NO_Conc,
          no2_blc_uncorrected = NO2_Conc,
@@ -42,7 +42,7 @@ nox2019 = read.csv("~/Cape Verde/nox/processing/processed_data/NOx_2019_calc_df_
   tibble() %>%
   mutate(date = ymd_hms(X),
          date = round_date(date,"5 min")) %>%
-  filter(date > "2019-01-01 00:00" & date < "2020-01-01 00:00") %>%
+  # filter(date > "2019-01-01 00:00" & date < "2020-01-01 00:00") %>%
   select(date,
          no_uncorrected = NO_Conc,
          no2_blc_uncorrected = NO2_Conc,
@@ -57,7 +57,7 @@ nox2020 = read.csv("~/Cape Verde/nox/processing/processed_data/NOx_2020_calc_df.
   tibble() %>% 
   mutate(date = ymd_hms(X),
          date = round_date(date,"5 min")) %>% 
-  filter(date > "2020-01-01 00:00" & date < "2021-01-01 00:00") %>% 
+  # filter(date > "2020-01-01 00:00" & date < "2021-01-01 00:00") %>% 
   select(date,
          no_uncorrected = NO_Conc,
          no2_blc_uncorrected = NO2_Conc,
@@ -72,7 +72,7 @@ nox2021 = read.csv("~/Cape Verde/nox/processing/processed_data/NOx_2021_calc_df.
   tibble() %>% 
   mutate(date = ymd_hms(X),
          date = round_date(date,"5 min")) %>% 
-  filter(date > "2021-01-01 00:00" & date < "2022-01-01 00:00") %>% 
+  # filter(date > "2021-01-01 00:00" & date < "2022-01-01 00:00") %>% 
   select(date,
          no_uncorrected = NO_Conc,
          no2_blc_uncorrected = NO2_Conc,
@@ -87,7 +87,7 @@ nox2022 = read.csv("~/Cape Verde/nox/processing/processed_data/NOx_2022_calc_df.
   tibble() %>% 
   mutate(date = ymd_hms(X),
          date = round_date(date,"5 min")) %>% 
-  filter(date > "2022-01-01 00:00" & date < "2023-01-01 00:00") %>% 
+  # filter(date > "2022-01-01 00:00" & date < "2023-01-01 00:00") %>% 
   select(date,
          no_uncorrected = NO_Conc,
          no2_blc_uncorrected = NO2_Conc,
@@ -102,7 +102,7 @@ nox2023 = read.csv("~/Cape Verde/nox/processing/processed_data/NOx_2023_calc_df.
   tibble() %>% 
   mutate(date = ymd_hms(X),
          date = round_date(date,"5 min")) %>% 
-  filter(date > "2023-01-01 00:00" & date < "2024-01-01 00:00") %>% 
+  # filter(date > "2023-01-01 00:00" & date < "2024-01-01 00:00") %>% 
   select(date,
          no_uncorrected = NO_Conc,
          no2_blc_uncorrected = NO2_Conc,
@@ -117,7 +117,22 @@ nox2024 = read.csv("~/Cape Verde/nox/processing/processed_data/NOx_2024_calc_df.
   tibble() %>% 
   mutate(date = ymd_hms(DateTime),
          date = round_date(date,"5 min")) %>% 
-  filter(date > "2024-01-01 00:00" & date < "2025-01-01 00:00") %>% 
+  # filter(date > "2024-01-01 00:00" & date < "2025-01-01 00:00") %>% 
+  select(date,
+         no_uncorrected = NO_Conc,
+         no2_blc_uncorrected = NO2_Conc,
+         no2_diodes = NO2_Conc_diode,
+         no_night = NO_night_mean,
+         no_corrected = NO_Conc_art_corrected,
+         no2_blc_corrected = NO2_Conc_art_corrected,
+         CE_diode) %>% 
+  timeAverage("5 min")
+
+nox2025 = read.csv("~/Cape Verde/nox/processing/processed_data/NOx_2025_calc_df.csv") %>% 
+  tibble() %>% 
+  mutate(date = ymd_hms(DateTime),
+         date = round_date(date,"5 min")) %>% 
+  # filter(date > "2025-01-01 00:00" & date < "2026-01-01 00:00") %>% 
   select(date,
          no_uncorrected = NO_Conc,
          no2_blc_uncorrected = NO2_Conc,
@@ -130,10 +145,13 @@ nox2024 = read.csv("~/Cape Verde/nox/processing/processed_data/NOx_2024_calc_df.
 
 # NO2 offset based on monthly minimum -------------------------------------
 
-nox_only = bind_rows(nox2017,nox2018,nox2019,nox2020,nox2021,nox2022,nox2023,nox2024) %>% 
-  arrange(date) %>% timeAverage("1 hour")
+nox_only = bind_rows(nox2017,nox2018,nox2019,nox2020,nox2021,nox2022,nox2023,nox2024,nox2025) %>% 
+  distinct(date, .keep_all = T) %>% 
+  arrange(date) %>% 
+  filter(date < "2025-01-01")
 
 nox_min_day = nox_only %>%
+  timeAverage("1 hour") %>% 
   mutate(no2_diodes = ifelse(no2_diodes <= 0, NA_real_,no2_diodes)) %>% 
   timeAverage("1 day",statistic = "min") %>% 
   mutate(no2_diodes_min = case_when(no2_diodes == Inf ~ NA_real_,
@@ -164,10 +182,8 @@ nox_min_month %>%
 nox_with_min = nox_only %>% 
   left_join(nox_min_month) %>% 
   mutate(no2_diodes_min_inter = na.approx(no2_diodes_min_month,na.rm = F)) %>% 
-  # fill(no2_diodes_min,.direction = "downup") %>% 
-  mutate(no2_diodes_corr_inter = no2_diodes - no2_diodes_min_inter,
-         no2_diodes_corr = no2_diodes - no2_diodes_min_month) %>% 
-  filter(date < "2024-11-01")
+  fill(no2_diodes_min_inter) %>%
+  mutate(no2_diodes_corr_inter = no2_diodes - no2_diodes_min_inter)
 
 nox_to_save = nox_with_min %>% 
   select(date,no = no_corrected,no2_corr = no2_diodes_corr_inter,ce = CE_diode) %>% 
@@ -184,8 +200,8 @@ nox_with_min %>%
 nox_with_min %>% 
   mutate(year = year(date)) %>% 
   # timeAverage("1 day") %>%
-  filter(year == 2024) %>%
-  pivot_longer(c(no2_diodes,no2_diodes_corr_inter)) %>% 
+  filter(date > "2024-01-01") %>%
+  pivot_longer(c(no2_diodes,no2_diodes_corr_inter)) %>%
   ggplot(aes(date,value,col = name)) +
   theme_bw() +
   geom_path() +
