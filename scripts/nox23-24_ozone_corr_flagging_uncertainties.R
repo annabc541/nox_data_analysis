@@ -2,8 +2,11 @@ library(tidyverse)
 library(lubridate)
 library(zoo)
 library(SciViews)
+library(openair)
 
 setwd("~/Cape Verde/nox/processing")
+
+#used this to get 2023 and 2024 data to be NO2 minima offset corrected (in R) and then ozone correct them and get uncertainties
 
 # Reading in data for monthly minima offset correction ------------------------------------
 
@@ -31,10 +34,11 @@ nox2025 = read.csv("~/Cape Verde/nox/processing/processed_data/NOx_2025_calc_df.
          no_art_unc = NO_art_total_uncertainty,night_diff = NO_night_diff_between_nights) %>%
   timeAverage("5 min")
 
-nox_only = bind_rows(nox2023,nox2024,nox2025) %>% 
+nox_only = nox2023 %>% 
+  # bind_rows(nox2023,nox2024,nox2025) %>% 
   distinct(date, .keep_all = T) %>% 
   arrange(date) %>% 
-  filter(date >= "2024-01-01" & date < "2025-01-01")
+  filter(date >= "2023-01-01" & date < "2024-01-01")
 
 # NO2 monthly minima offset correction ------------------------------------
 
@@ -81,6 +85,11 @@ nox_with_min = nox_only %>%
 
 # Read in data ------------------------------------------------------------
 
+err_dat23 = read.csv("processed_data/NOx_2023_error_df.csv",header=TRUE,na.strings= c('NA','missing')) %>% 
+  mutate(date = ymd_hms(X)) %>%
+  filter(date >= "2023-01-01") %>% 
+  select(date,no_lod = LOD_NO_pptv_1h,no2_lod = LOD_NO2_diode_pptv_1h)
+
 err_dat24 = read.csv("processed_data/NOx_2024_error_df.csv",header=TRUE,na.strings= c('NA','missing')) %>%
   mutate(date = ymd_hms(DateTime)) %>%
   filter(date >= "2024-01-01") %>% 
@@ -96,17 +105,17 @@ err_dat = err_dat24 %>%
   distinct(date, .keep_all = T) %>% 
   timeAverage("1 hour")
 
-cal_dat = read.csv("processed_data/NOx_2024_cal_df.csv",header=TRUE,na.strings= c('NA','missing')) %>% 
-  mutate(date = ymd_hms(DateTime),
+cal_dat = read.csv("processed_data/NOx_2023_cal_df.csv",header=TRUE,na.strings= c('NA','missing')) %>% 
+  mutate(date = ymd_hm(DateTime),
          date = round_date(date, "1 hour")) %>% 
-  filter(date >= "2024-01-01") %>%
+  filter(date > "2023-01-01" & date < "2024-01-01") %>% 
   select(date,tot_cal_unc_no = Total_calibration_uncertainty_NO,
          tot_cal_unc_no2 = Total_calibration_uncertainty_NO2_diode)
 
 met_data = read.csv("~/Cape Verde/20240507_CV_merge.csv") %>% 
   mutate(date = dmy_hm(date),
          date = round_date(date, "1 hour")) %>% 
-  filter(date >= "2024-01-01" & date < "2025-01-01") %>% 
+  filter(date >= "2023-01-01" & date < "2024-01-01") %>% 
   select(date,ws,wd,o3_ppb = O3_ppbV)
 
 # Hourly stats ------------------------------------------------------------
@@ -141,7 +150,7 @@ k = 1.8*10^-14 #rate constant for NO + O3 -> NO2 + O2
 
 corr_calc_dat = met_data %>%
   left_join(hourly_calc_dat) %>% 
-  left_join(err_dat) %>% 
+  left_join(err_dat23) %>% 
   #calculations for NO and NO2 ozone correction (derivations in SI of Andersen et al. 2021)
   mutate(ko3 = (1.8*10^-14)*o3_ppb*(10^-9)*(2.48*10^19), #ko3 = kno+o3 * o3 (ppb), kno+o3 = 1.8*10^-14, 10^-9 and 2.48*10^-19 for units
          no_corr = no_mean * exp(ko3 * 4.3), #4.3 is the time the sample gas spends in the sample line
@@ -191,6 +200,7 @@ data_to_save = uncertainties %>%
          no2 = no2_corr) %>% 
   rename_with(.fn = function(.x){paste0(.x,"_ppt")},
               .cols = c(no,no2,no_lod,no2_lod,no_u,no2_u)) %>% 
-  select(date,no_ppt,no_lod_ppt,no_u_ppt,no_flag,no2_ppt,no2_lod_ppt,no2_u_ppt,no2_flag)
+  select(date,no_ppt,no_lod_ppt,no_u_ppt,no_flag,no2_ppt,no2_lod_ppt,no2_u_ppt,no2_flag) %>% 
+  mutate(date = format(date, "%Y-%m-%d %H:%M:%S"))
 
-# write.csv(data_to_save,"ozone_correction/processed_data/nox2023.csv",row.names = F)
+write.csv(data_to_save,"~/Cape Verde/nox/nox_data_analysis/output/data/nox2023_with_uncertainties.csv",row.names = F)

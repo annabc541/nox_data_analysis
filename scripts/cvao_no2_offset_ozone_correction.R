@@ -1,4 +1,5 @@
 library(tidyverse)
+library(openair)
 library(zoo)
 
 Sys.setenv(TZ = "UTC")
@@ -8,16 +9,24 @@ Sys.setenv(TZ = "UTC")
 # Reading in data ---------------------------------------------------------
 
 nox = read.csv("output/data/cvao_nox_offset_corr.csv") %>% 
-  mutate(date = ymd_hms(date))
+  mutate(date = ymd_hms(date)) %>% 
+  rename(no_ppt = no, no2_ppt = no2_corr)
 
 nox_hourly = nox %>% 
-  timeAverage("1 hour") %>% 
-  filter(date >= "2017-01-01")
+  group_by(date = floor_date(date,"1 hour")) %>% 
+  summarise(no_count = sum(!is.na(no_ppt)),
+            no2_count = sum(!is.na(no2_ppt)),
+            ce_mean = mean(ce,na.rm = TRUE),
+            no_mean = mean(no_ppt,na.rm = TRUE),
+            no2_mean = mean(no2_ppt,na.rm = TRUE),
+            no_median = median(no_ppt,na.rm = TRUE),
+            no2_median = median(no2_ppt,na.rm = TRUE)) %>% 
+  fill(ce_mean,.direction = "downup")
 
-met_data = read.csv("~/Cape Verde/20240507_CV_merge.csv") %>% 
+met_data = read.csv("D:/Documents - Copy/Cape Verde/20240507_CV_merge.csv") %>% 
   mutate(date = dmy_hm(date),
          date = round_date(date, "1 hour")) %>% 
-  # filter(date > "2016-12-31 23:59") %>% 
+  filter(date > "2016-12-31 23:59" & date < "2025-01-01") %>%
   select(date,ws,wd,o3_ppb = O3_ppbV)
 
 # Ozone correction --------------------------------------------------------
@@ -32,23 +41,32 @@ t = 4.3 #time in sample line (between inlet and reaction cell) 4.3s
 k = 1.8*10^-14 #rate constant for NO + O3 -> NO2 + O2
 
 corr_calc_dat = met_data %>%
-  left_join(nox) %>%
-  fill(ce,.direction = "updown") %>% 
+  left_join(nox_hourly) %>%
   #calculations for NO and NO2 ozone correction (derivations in SI of Andersen et al. 2021)
   mutate(ko3 = (1.8*10^-14)*o3_ppb*(10^-9)*(2.48*10^19), #ko3 = kno+o3 * o3 (ppb), kno+o3 = 1.8*10^-14, 10^-9 and 2.48*10^-19 for units
-         no_corr = no * exp(ko3 * 4.3), #4.3 is the time the sample gas spends in the sample line
-         j = -log(1 - ce)/tc, #j = -ln(1-ce)/time_in_converter
-         no2_corr_o3_corr = ((j + ko3)/j) *
-           (((no + no2_corr * ce) - no * exp(-j)) /
+         no_corr = no_mean * exp(ko3 * 4.3), #4.3 is the time the sample gas spends in the sample line
+         j = -log(1 - ce_mean)/tc, #j = -ln(1-ce)/time_in_converter
+         no2_corr = ((j + ko3)/j) *
+           (((no_mean + no2_mean * ce_mean) - no_mean * exp(-j)) /
               (1-exp(-ko3 - j))) - no_corr) %>% 
-  select(-c(ce,ko3,j))
+  select(-c(ce_mean,ko3,j))
 
-dat_corr_flagged = corr_calc_dat %>% 
-  mutate(local_pollution = case_when(wd > 100 & wd < 340 | ws < 2 ~ 1,
-                             TRUE ~ 0))
+flagged_dat = corr_calc_dat %>% 
+  mutate(no_flag = case_when(no_corr > 50 ~ 0.459, #0.459 denotes extreme value -> NO above 50 ppt
+                             wd > 100 & wd < 340 | ws < 2 ~ 0.559, #0.559 for local contamination (ws and wd indicating air coming from over the island)
+                             no_count < 6 ~ 0.391, #0.391 for data coverage < 50% (12 measurements an hour)
+                             abs(no_mean - no_median) > 4.8 ~ 0.456, #0.456 invalidated by data originator, likely a spike if these two differ too much
+                             TRUE ~ 0), 
+         no2_flag = case_when(no2_corr > 200 ~ 0.459,
+                              wd > 100 & wd < 340 | ws < 2 ~ 0.559,
+                              no2_count < 6 ~ 0.391,
+                              abs(no2_mean - no2_median) > 33.3 ~ 0.456,
+                              TRUE ~ 0)) %>% 
+  select(date,no_corr,no_flag,no2_corr,no2_flag)
 
-dat_to_save = dat_corr_flagged %>% 
-  select(date,no_corr,no2_corr = no2_corr_o3_corr) %>% 
+
+dat_to_save = flagged_dat %>% 
+  # select(date,no_corr,no2_corr = no2_corr_o3_corr) %>% 
   mutate(date = format(date, "%Y-%m-%d %H:%M:%S"))
 
 write.csv(dat_to_save,"output/data/cvao_nox_offset_ozone_corr.csv",row.names = F)
