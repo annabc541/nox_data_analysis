@@ -548,40 +548,37 @@ air_masses2 %>%
 
 # Air mass classification ---------------------------------------------------
 
-#classified based on 6-hour back trajectories (filled data)
-dat_air_masses = dat %>% 
-  fill(upwelling:south_atlantic) %>% 
-  mutate(missing_dates = case_when(date >= "2022-08-23" & date <= "2022-08-31 17:00" ~ 1,
-                                   date >= "2022-11-30 19:00" & date <= "2022-12-01 05:00" ~ 1,
-                                   date >= "2022-12-06 13:00" & date <= "2022-12-06 23:00" ~ 1,
-                                   date >= "2023-08-01" & date <= "2023-08-31" ~ 1,
-                                   date >= "2023-10-20 19:00" & date <= "2023-10-21 11:00" ~ 1,
-                                   date >= "2024-02-08 13:00" & date <= "2024-02-08 23:00" ~ 1,
-                                   date >= "2024-04-02 01:00" & date <= "2024-04-03 05:00" ~ 1,
-                                   date >= "2024-11-12 07:00" & date <= "2024-11-12 17:00" ~ 1,
-                                   TRUE ~ 0),
-         across(c(upwelling:south_atlantic), ~ ifelse(missing_dates == 1,NA_real_,.)),
-         across(-date, ~ifelse(is.na(ws) == TRUE | is.na(wd) == TRUE,NA_real_,.)),
-         ocean = upwelling + north_atlantic + south_atlantic,
+#classified based on daily averages
+air_masses_classified = dat %>% 
+  select(date,upwelling:south_atlantic,ws,wd) %>% 
+  mutate(across(-date, ~ifelse(is.na(ws) == TRUE | is.na(wd) == TRUE | ws <= 2 | between(wd,100,340),NA_real_,.))) %>% 
+  timeAverage("1 day",data.thresh = 16) %>% 
+  mutate(ocean = upwelling + north_atlantic + south_atlantic,
          african = central_africa + sahel + west_africa + sahara,
          polluted = african + north_america + europe,
-         air_masses = case_when(wd >= 100 & wd <= 340 | ws <= 2 ~ "Local pollution",
-                                ocean >= 99 & south_atlantic < 1 | south_america < 1 & south_america > 0 & ocean >= 99 ~ "North Atlantic",
-                                polluted < 5 & south_atlantic > 1 | south_america > 0 & polluted < 5  ~ "Southern Hemisphere",
-                                # african > 0 & african <= 1 & north_america <= african & europe <= african ~ "African (coastal)",
-                                europe <= african & north_america <= african & african > 1 ~ "African",
-                                europe > african & europe >= north_america & europe > 0  ~ "European/North Atlantic",
-                                north_america > african & north_america > europe & north_america > 0 ~ "North American/Atlantic"))
+         air_masses = case_when(ocean >= 98 & south_atlantic <= 1 ~ "North Atlantic",
+                                south_atlantic > 1 & south_atlantic + south_america > polluted ~ "Southern Hemisphere",
+                                african > polluted/2 & african > 1 ~ "African",
+                                europe > polluted/2 & europe > 1 ~ "European/North Atlantic",
+                                north_america > polluted/2 & north_america > 1 ~ "North American/Atlantic",
+                                # is.na(sahara) == F ~ "Unclear"
+                                ),
+         na_flag = ifelse(is.na(air_masses),1,0)) %>% 
+  select(date,air_masses,na_flag)
 
-dat_air_masses %>%
-  mutate(year = year(date),
-         month = month(date),
+air_mass_stats = air_masses_classified %>% 
+  count(air_masses) %>% 
+  mutate(percent = n/sum(n) *100)
+
+air_masses_classified %>%
+  mutate(month = month(date),
+         year = year(date),
          season = case_when(month >= 3 & month <= 5 ~ "Spring~(MAM)",
                             month >= 6 & month <= 8 ~ "Summer~(JJA)",
                             month >= 9 & month <= 11 ~ "Autumn~(SON)",
                             TRUE ~ "Winter~(DJF)")) %>%
-  filter(is.na(sahara) == F,
-         is.na(air_masses) == F) %>%
+  filter(is.na(air_masses) == F,
+         year == 2016) %>%
   ggplot(aes(air_masses,fill = air_masses)) +
   theme_bw() +
   geom_histogram(stat = "count") +
@@ -591,16 +588,21 @@ dat_air_masses %>%
   theme(legend.position = "None") +
   facet_wrap(~factor(season,levels = c("Spring~(MAM)","Summer~(JJA)","Autumn~(SON)","Winter~(DJF)")),
              labeller = label_parsed) +
-  scale_x_discrete(labels = c("Local pollution" = "LP",
-                              "African" = "Afr",
+  scale_x_discrete(labels = c("African" = "Afr",
                               "European/North Atlantic" = "Eu/NAt",
                               "North American/Atlantic" = "Am/NAt",
                               "North Atlantic" = "NAt",
                               "Southern Hemisphere" = "SH")) +
-  scale_fill_manual(values = c("darkred","darkolivegreen3","khaki4","springgreen4","navy","steelblue1")) +
+  scale_fill_manual(values = c("goldenrod1","darkolivegreen3","springgreen4","navy","steelblue1")) +
   theme(legend.position = "top",
         text = element_text(size = 20)) +
   NULL
+
+dat_air_masses = dat %>% 
+  left_join(air_masses_classified,by = "date") %>% 
+  fill(na_flag,air_masses,.direction = "down") %>% 
+  mutate(air_masses = ifelse(na_flag == 1,NA_real_,air_masses)) %>% 
+  select(-na_flag)
 
 nox_mean_airmass = dat_air_masses %>% 
   mutate(no_ppt = ifelse(no_flag <= 0.147,no_ppt,NA_real_),
@@ -613,42 +615,17 @@ nox_mean_airmass = dat_air_masses %>%
                             TRUE ~ "Winter (DJF)")) %>% 
   filter(date > "2017-01-01",
          hour >= 11 & hour <= 15) %>%
-  group_by(air_masses,season) %>% 
+  group_by(air_masses) %>% 
   summarise(across(c(no_ppt,no2_ppt),list(mean = ~mean(.,na.rm = T),
                                           sd =~2*sd(.,na.rm = T),
                                           se = ~sd(., na.rm = TRUE) / sqrt(length(.)),
                                           count = ~sum(!is.na(.)))))
 
 # ggsave("air_mass_classification.png",
-#        path = "output/plots",
+#        path = "~/Writing/Thesis/Chapter 4 (NOx CVAO science)/Images",
 #        height = 15,
 #        width = 30,
 #        units = "cm")
-
-# test = dat_air_masses %>%
-#   mutate(hour = hour(date)) %>%
-#   filter(is.na(sahara) == F,
-#          # date >= "2023-06-01" & date <= "2023-09-30" | date >= "2024-09-01",
-#          # hour == 0 | hour == 6 | hour == 12 | hour == 18,
-#          ) %>%
-#   select(date,o3_ppb,upwelling:air_masses)
-
-#classified based on hourly air masses (interpolate between them)
-# dat_air_masses = dat %>% 
-#   mutate(across(c(upwelling:south_atlantic),na.approx,na.rm = F,maxgap = 5),
-#          ocean = upwelling + north_atlantic + south_atlantic,
-#          african = central_africa + sahel + west_africa + sahara,
-#          polluted = african + north_america + europe + south_america,
-#          air_masses = case_when(wd >= 100 & wd <= 340 | ws <= 2 ~ "Local pollution",
-#                                 ocean >= 99.99 ~ "Atlantic",
-#                                 african < 10 & african >= europe & african >= north_america ~ "African (coastal)",
-#                                 europe <= african & north_america <= african & african >= 10 ~ "African (continental)",
-#                                 europe > african & europe >= north_america  ~ "European aged pollution",
-#                                 north_america > african & north_america > europe ~ "North American aged pollution"))
-# 
-# test = dat_air_masses %>% 
-#   filter(is.na(upwelling) == T) %>% 
-#   select(date)
 
 # Diurnals in different air masses ---------------------------------------
 
@@ -707,40 +684,42 @@ dat_air_masses %>%
        fill = NULL)
 
 ggsave("diurnals_different_air_masses_no_SH.png",
-       path = "output/plots",
+       path = "~/Writing/Thesis/Chapter 4 (NOx CVAO science)/Images",
        height = 15,
        width = 30,
        units = "cm")
 
 # Mixing ratios in different air masses ---------------------------------------------------------------
 
-#fboxplot facetted by air mass and by nox
+#boxplot facetted by air mass and by nox
 dat_air_masses %>% 
   mutate(month = month(date),
          year = year(date),
          hour = hour(date),
-         `Daytime~NO` = ifelse(no_flag <= 0.147, no_ppt,NA_real_),
-         `Daytime~NO[2]` = ifelse(no2_flag <= 0.147, no2_ppt,NA_real_),
-         season = case_when(month >= 3 & month <= 5 ~ "Spring (MAM)",
-                            month >= 6 & month <= 8 ~ "Summer (JJA)",
-                            month >= 9 & month <= 11 ~ "Autumn (SON)",
-                            TRUE ~ "Winter (DJF)"),
+         no_ppt = ifelse(no_flag <= 0.147 & between(hour,11,15), no_ppt,NA_real_),
+         no2_ppt = ifelse(no2_flag <= 0.147 & between(hour,11,15), no2_ppt,NA_real_),
+         ozone_nine = ifelse(hour == 9 & no_flag != 0.559 & no_flag != 0.599,o3_ppb,NA_real_),
+         ozone_five = ifelse(hour == 17 & no_flag != 0.559 & no_flag != 0.599,o3_ppb,NA_real_),
          air_masses = case_when(air_masses == "North Atlantic" ~ "North~Atlantic",
                                 air_masses == "European/North Atlantic" ~ "European/North~Atlantic",
-                                # air_masses == "North American/Atlantic" ~ "North~American/Atlantic",
-                                TRUE ~ air_masses)
-         ) %>% 
-  filter(# air_masses == "European/North~Atlantic",
-         air_masses != "Local pollution",
-         air_masses != "Southern Hemisphere",
-         air_masses != "North American/Atlantic",
-         # season == "Winter (DJF)",
-         hour >= 11 & hour <= 15
-         ) %>%
+                                TRUE ~ air_masses)) %>% 
+  # filter(hour >= 11 & hour <= 15) %>% 
+  timeAverage("1 day",data.thresh = 16) %>% 
+  mutate(ocean = upwelling + north_atlantic + south_atlantic,
+         african = central_africa + sahel + west_africa + sahara,
+         polluted = african + north_america + europe,
+         air_masses = case_when(ocean >= 98 & south_atlantic <= 1 ~ "North~Atlantic",
+                                south_atlantic > 1 & south_atlantic + south_america > polluted ~ "Southern Hemisphere",
+                                african > polluted/2 & african > 1 ~ "African",
+                                europe > polluted/2 & europe > 1 ~ "European/North~Atlantic",
+                                north_america > polluted/2 & north_america > 1 ~ "North American/Atlantic")) %>% 
+  filter(air_masses != "Southern Hemisphere",
+         air_masses != "North American/Atlantic") %>%
+  rename(`Daytime~NO` = no_ppt,`Daytime~NO[2]` = no2_ppt) %>% 
   pivot_longer(c(`Daytime~NO`,`Daytime~NO[2]`)) %>%
   ggplot(aes(as.character(year),value,fill = air_masses)) +
   theme_bw() +
-  geom_boxplot(outliers = F) +
+  geom_boxplot(outliers = F,varwidth =  T) +
   scale_fill_manual(values = c("goldenrod1","darkolivegreen3","#1E3799")) +
   # ylim(-5,20) +
   # ylim(0,100) +
@@ -936,50 +915,34 @@ no2_pss = dat_for_pss %>%
          leighton_ratio = (jno2*no2_molecule_cm3)/(k*o3_molecule_cm3*no_molecule_cm3),
          year = year(date))
 
-no2_pss %>% 
+no2_pss_daily = no2_pss %>% 
   filter(no_ppt <= no2_ppt,
-         no_ppt > 0,
-         no2_ppt > 0,
          no2_lifetime <= 10) %>%
-  timeAverage("1 day") %>%
-  # mutate(month = month(date),
-  #        year = year(date),
-  #        ratio = case_when(month == 11 & year != 2019 ~ NA_real_,
-  #                          month == 10 & year != 2017 ~ NA_real_,
-  #                          month == 9 & year == 2018 ~ NA_real_,
-  #                          TRUE ~ ratio)) %>% 
-  # filter(date >= "2017-07-01" & date <= "2020-06-30") %>% 
-  ggplot(aes(no_ppt,ratio,col = as.character(year))) +
-  geom_point() +
-  facet_wrap(~as.character(month)) +
-  # ylim(0,5) +
-  # xlim(0,15) +
-  geom_hline(aes(yintercept = 1))
+  select(-c(no_flag,no_lod_ppt,no2_flag,no2_lod_ppt,jno2_calc:j_no2,missing_dates:no2_lifetime,leighton_ratio)) %>% 
+  timeAverage("1 day") %>% 
+  mutate(ocean = upwelling + north_atlantic + south_atlantic,
+         african = central_africa + sahel + west_africa + sahara,
+         polluted = african + north_america + europe,
+         air_masses = case_when(ocean >= 98 & south_atlantic <= 1 ~ "North Atlantic",
+                                south_atlantic > 1 & south_atlantic + south_america > polluted ~ "Southern Hemisphere",
+                                african > polluted/2 & african > 1 ~ "African",
+                                europe > polluted/2 & europe > 1 ~ "European/North Atlantic",
+                                north_america > polluted/2 & north_america > 1 ~ "North American/Atlantic"))
 
 #no2 obs vs no2 pss
-no2_pss %>% 
-  filter(
-    # is.na(air_masses) == F,
-         # air_masses != "Local pollution" & air_masses != "Southern Hemisphere",
-         no2_flag == 0,
-         no_flag == 0,
-         no_ppt <= no2_ppt,
-         # no_ppt > 0,
-         # no2_ppt > 0,
-         no2_lifetime <= 10,
-         date >= "2017-07-01" & date <= "2020-06-30"
-         ) %>% 
+no2_pss_daily %>% 
+  filter(air_masses != "Southern Hemisphere",
+         is.na(air_masses) == F) %>% 
   mutate(year = year(date),
          month = month(date),
          season = case_when(month >= 3 & month <= 5 ~ "Spring (MAM)",
                             month >= 6 & month <= 8 ~ "Summer (JJA)",
                             month >= 9 & month <= 11 ~ "Autumn (SON)",
                             TRUE ~ "Winter (DJF)")) %>% 
-  # pivot_longer(c(no2_pss_ext,no2_pss_simp)) %>% 
   ggplot(aes(no2_ppt,no2_pss_ext)) +
   theme_bw() +
   geom_point(aes()) +
-  # facet_wrap(~season,scales = "free") +
+  facet_wrap(~air_masses,scales = "free") +
   labs(x = expression(NO[2~Obs]~(ppt)),
        y = expression(NO[2~PSS]~(ppt))) +
   stat_poly_line(col = "steelblue1") +
