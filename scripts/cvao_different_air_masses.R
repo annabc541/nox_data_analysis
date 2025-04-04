@@ -29,6 +29,15 @@ tidy_rle = function(rleObj){
   rleDf
 }
 
+NormalisedMeanBias <- function(modelled, observations, na.rm){
+  mod <- modelled
+  obs <- observations
+  
+  NMB <- (sum(mod - obs, na.rm = na.rm)/sum(obs, na.rm = na.rm))*100
+  NMB
+}
+
+
 # Reading in nox data ---------------------------------------------------------
 
 # setwd("~/Cape Verde/nox/data_submission/downloaded_data/simone")
@@ -116,8 +125,9 @@ ebas_no = left_join(ebas_no_2,ebas_no_3,by = "date") %>%
   # filter(no_flag_1 != 0.999) %>%
   arrange(date) %>% 
   mutate(no_ppt = ifelse(no_flag_1 == 0.999 | no_ppb_1 >= 9.99999990,NA_real_,no_ppb_1 * 10^3),
-         no_u_ppt = ifelse(no_flag_1 == 0.999,NA_real_,no_uncertainty_ppb_1 * 10^3)) %>% 
-  select(date,no_ppt,no_flag = no_flag_1) %>% 
+         no_u_ppt = ifelse(no_flag_1 == 0.999,NA_real_,no_uncertainty_ppb_1 * 10^3),
+         no_lod_ppt = ifelse(no_flag_1 == 0.999,NA_real_,no_lod_ppb_1 * 10^3)) %>% 
+  select(date,no_ppt,no_u_ppt,no_flag = no_flag_1) %>% 
   filter(date < "2017-01-01") %>% 
   # bind_rows(early_dat) %>% 
   arrange(date)
@@ -180,9 +190,17 @@ met_data = read.csv("~/Cape Verde/20240507_CV_merge.csv") %>%
   select(date,ws:rh_10m,o3_ppb = o3_ppb_v,co_ppb = co_ppb_v,ch4_all_ppb_v:co2_with_mpi_flasks_ppm_v,
          jno2_calc,jo1d_calc,j_o1d,j_no2)
 
+spec_rad_feb23 = read.csv("data/Specrad_hour_Feb23_with_calc.csv") %>% 
+  clean_names() %>% 
+  mutate(date = dmy_hm(date),
+         jno2_23 = ifelse(is.na(j_no2),jno2_calc,j_no2)) %>% 
+  filter(is.na(date) == F) %>% 
+  select(date,jno2_23)
+
 voc_data = read.csv("data/timeseries_all_GCFID_VOC_data_2006_to_2024_March25.csv") %>% 
   mutate(date = dmy_hm(date_time)) %>% 
   filter(date > "2012-01-01") %>% 
+  timeAverage("1 hour") %>% 
   mutate(propene = ifelse(date >= "2023-01-01",NA_real_,propene)) %>% 
   select(date,ethane:isoprene)
 
@@ -197,6 +215,7 @@ air_masses = read.csv("~/Cape Verde/new_CVAO_sector_%_boxes_1.csv") %>%
 df_list = list(nox,voc_data,met_data,air_masses)
 
 dat = df_list %>% reduce(full_join,by = "date") %>% 
+  left_join(spec_rad_feb23,by = "date") %>%
   mutate(jno2_calc = case_when(date >= "2023-05-02 12:00" & date <= "2023-06-01 17:00" ~ NA_real_,
                                date >= "2023-02-01 09:00" & date <= "2023-08-31 17:00" ~ NA_real_,
                                TRUE ~ jno2_calc),
@@ -208,6 +227,7 @@ dat = df_list %>% reduce(full_join,by = "date") %>%
                           date >= "2024-01-17" & date <="2024-01-24 19:00" ~ NA_real_,
                           date >= "2024-01-26 19:00" & date <="2024-01-27 16:00" ~ NA_real_,
                           jno2 <= 0 ~ NA_real_,
+                          is.na(jno2) ~ jno2_23,
                           TRUE ~ jno2),
          wind_flag = ifelse(ws <2 | between(wd,100,340),1,0),
          across(-c(date), ~ifelse(is.na(ws) == TRUE | is.na(wd) == TRUE | wind_flag == 1,NA_real_,.)),
@@ -251,23 +271,38 @@ dat = df_list %>% reduce(full_join,by = "date") %>%
                               date >= "2024-11-23 08:00" & date <= "2024-11-23 12:00" ~ 0.456,#massive spike
                               date >= "2024-11-29 16:00" & date <= "2024-11-29 17:00" ~ 0.456,#massive spike
                               date >= "2021-05-19 16:00" & date <= "2021-05-31 22:00" ~ 0.456,
-                              TRUE ~ no2_flag))
+                              TRUE ~ no2_flag)) %>% 
+  select(-c(jno2_23))
 
 # Timeseries --------------------------------------------------------------
 
-dat %>% 
+# test =
+  dat %>% 
   # filter(date > "2017-01-01") %>%
   mutate(year = year(date),
          doy = yday(date),
          month = month(date),
-         NO = ifelse(no_flag <= 0, no_ppt,NA_real_),
-         NO2 = ifelse(no2_flag <= 0 & date >= "2017-01-01", no2_ppt,NA_real_)) %>% 
+         NO = ifelse(no_flag <= 0.147, no_ppt,NA_real_),
+         NO2 = ifelse(no2_flag <= 0.147 & date >= "2017-01-01", no2_ppt,NA_real_),
+         no_u_ppt = ifelse(no_u_ppt > 100 | is.na(NO),NA_real_,no_u_ppt),
+         no2_u_ppt = ifelse(no2_u_ppt > 2500 | is.na(NO2),NA_real_,no2_u_ppt)) %>% 
   timeAverage(pollutant = c("NO","NO2"),avg.time = "1 day") %>%
+  mutate(no_max = ifelse(no_u_ppt < 10,NO + no_u_ppt,NA_real_),
+         no_min = ifelse(no_u_ppt < 10,NO - no_u_ppt,NA_real_),
+         no2_max = ifelse(no2_u_ppt < 10,NO2 + no2_u_ppt,NA_real_),
+         no2_min = ifelse(no2_u_ppt < 10,NO2 - no2_u_ppt,NA_real_),
+         no_min = ifelse(no_min > -5,no_min,NA_real_)) %>% 
+  # select(date,no_ppt:no2_flag,NO:no2_min)
   rename(`NO[2]` = NO2) %>% 
   pivot_longer(c(NO,`NO[2]`)) %>%
-  # filter(year < 2024) %>%
-  ggplot(aes(date,value,col = name)) +
-  geom_path(linewidth = 0.75) +
+  pivot_longer(c(no_max,no2_max),names_to = "max_names",values_to = "max_values") %>% 
+  pivot_longer(c(no_min,no2_min),names_to = "min_names",values_to = "min_values") %>% 
+  mutate(flag = case_when(name == "NO" & max_names == "no_max" & min_names == "no_min" ~ "NO",
+                          name == "NO[2]" & max_names == "no2_max" & min_names == "no2_min" ~ "NO2")) %>% 
+  filter(is.na(flag) == F) %>%
+  ggplot() +
+  geom_path(aes(date,value,col = name),linewidth = 0.75) +
+  geom_ribbon(aes(date,ymax = max_values,ymin = min_values,fill = name),alpha = 0.3) +
   theme_bw() +
   facet_wrap(~name,scales = "free",labeller = label_parsed,ncol = 1) +
   scale_x_datetime(breaks = "1 year",date_labels = "%Y") +
@@ -278,29 +313,29 @@ dat %>%
        y = expression(Daily~mean~NO[x]~mixing~ratio~(ppt))) +
   NULL
 
-# ggsave("nox_daily_timeseries.png",
-#        path = "~/Writing/Thesis/Chapter 4 (NOx CVAO science)/Images",
-#        height = 15,
-#        width = 30,
-#        units = "cm")
+ggsave("nox_daily_timeseries.png",
+       path = "~/Writing/Thesis/Chapter 4 (NOx CVAO science)/Images",
+       height = 15,
+       width = 30,
+       units = "cm")
 
 # Trends? -----------------------------------------------------------------
 
 trend_analysis = dat %>% 
   # filter(date >= "2017-01-01") %>%
   mutate(NO = ifelse(no_flag <= 0.147,no_ppt,NA_real_),
-         NO2 = ifelse(no2_flag <= 0.147,no2_ppt,NA_real_),
+         NO2 = ifelse(no2_flag < 0.147,no2_ppt,NA_real_),
          african = sahara + west_africa + sahel + central_africa)
 
 trend_plot = smoothTrend(trend_analysis,
-                        ylab = "North American air mass (%)",
+                        # ylab = "North American air mass (%)",
                         xlab = NULL,
                         # data.thresh = 30,
                         # type = "season",
-                        deseason = T,
+                        # deseason = T,
                         col = c("springgreen4"),
                         # avg.time = "season",
-                        pollutant = c("north_america"))
+                        pollutant = c("NO"))
 
 png(filename = "~/Writing/Thesis/Chapter 4 (NOx CVAO science)/Images/cheating/no_trend_deseason.png",
     width = 15, height = 10, units = "cm", res = 300)
@@ -372,11 +407,11 @@ dat %>%
        col = NULL,
        fill = NULL)
 
-ggsave("nox_seasonal_diurnal.png",
-       path = "~/Writing/Thesis/Chapter 3 (NOx CVAO science)/Images",
-       height = 15,
-       width = 30,
-       units = "cm")
+# ggsave("nox_seasonal_diurnal.png",
+#        path = "~/Writing/Thesis/Chapter 3 (NOx CVAO science)/Images",
+#        height = 15,
+#        width = 30,
+#        units = "cm")
 
 # Monthly averages -------------------------------------------------------
 
@@ -438,7 +473,7 @@ delta_ozone = dat %>%
          month = month(date),
          year = year(date),
          hour = hour(date),
-         daytime_no = ifelse(hour >= 11 & hour <= 12 & no_flag <= 0.147,no_ppt,NA_real_),
+         daytime_no = ifelse(hour >= 11 & hour <= 15 & no_flag <= 0.147,no_ppt,NA_real_),
          ozone_nine = ifelse(hour == 9 & no_flag != 0.559 & no_flag != 0.599,o3_ppb,NA_real_),
          ozone_five = ifelse(hour == 17 & no_flag != 0.559 & no_flag != 0.599,o3_ppb,NA_real_),
          ozone_ten = ifelse(hour == 22 & no_flag != 0.559 & no_flag != 0.599,o3_ppb,NA_real_),
@@ -459,21 +494,27 @@ delta_ozone = dat %>%
 delta_ozone %>% 
   mutate(year = year(date),
          month = month(date),
-         doy = yday(date)) %>% 
+         doy = yday(date),
+         year = year(date)) %>% 
   # filter(year >= 2017) %>%
-  timeAverage("1 month") %>%
-  # mutate(air_masses = case_when(ocean >= 98 & south_atlantic <= 1 ~ "North Atlantic",
-  #                               south_atlantic > 1 & south_atlantic + south_america > polluted ~ "Southern Hemisphere",
-  #                               african > polluted/2 & african > 1 ~ "African",
-  #                               europe > polluted/2 & europe > 1 ~ "European/North Atlantic",
-  #                               north_america > polluted/2 & north_america > 1 ~ "North American/Atlantic")) %>% 
-  # group_by(month) %>%
-  # summarise(entrainment_deposition = mean(entrainment_deposition,na.rm = T),
-            # delta_ozone = mean(delta_ozone,na.rm = T),
-            # delta_ozone_chem = mean(delta_ozone_chem,na.rm = T),
-            # daytime_no = mean(daytime_no,na.rm = T)) %>%
+  # timeAverage("1 month") %>%
+  mutate(ocean = upwelling + north_atlantic + south_atlantic,
+         african = central_africa + sahel + west_africa + sahara,
+         polluted = african + north_america + europe,
+         air_masses = case_when(ocean >= 98 & south_atlantic <= 1 ~ "North Atlantic",
+                                south_atlantic > 1 & south_atlantic + south_america > polluted ~ "Southern Hemisphere",
+                                african > polluted/2 & african > 1 ~ "African",
+                                europe > polluted/2 & europe > 1 ~ "European/North Atlantic",
+                                north_america > polluted/2 & north_america > 1 ~ "North American/Atlantic")) %>%
+  filter(is.na(air_masses) == F,
+         air_masses != "Southern Hemisphere") %>% 
+  group_by(month,air_masses) %>%
+  summarise(entrainment_deposition = mean(entrainment_deposition,na.rm = T),
+  delta_ozone = mean(delta_ozone,na.rm = T),
+  delta_ozone_chem = mean(delta_ozone_chem,na.rm = T),
+  daytime_no = mean(daytime_no,na.rm = T)) %>%
   pivot_longer(c(daytime_no,delta_ozone_chem)) %>%
-  ggplot(aes(date,value,col = name)) +
+  ggplot(aes(month,value,col = air_masses)) +
   theme_bw() +
   # stat_poly_line(col = "steelblue1",fullrange = T) +
   # stat_poly_eq(mapping = use_label("eq"),
@@ -722,8 +763,8 @@ dat_air_masses %>%
   mutate(month = month(date),
          year = year(date),
          hour = hour(date),
-         no_ppt = ifelse(no_flag <= 0 & between(hour,11,12), no_ppt,NA_real_),
-         no2_ppt = ifelse(no2_flag <= 0 & between(hour,11,12), no2_ppt,NA_real_),
+         no_ppt = ifelse(no_flag <= 0.147 & between(hour,11,15), no_ppt,NA_real_),
+         no2_ppt = ifelse(no2_flag <= 0.147 & between(hour,11,15), no2_ppt,NA_real_),
          ozone_nine = ifelse(hour == 9,o3_ppb,NA_real_),
          ozone_five = ifelse(hour == 17,o3_ppb,NA_real_),
          ozone_ten = ifelse(hour == 22 & no_flag != 0.559 & no_flag != 0.599,o3_ppb,NA_real_),
@@ -747,9 +788,9 @@ dat_air_masses %>%
                                 north_america > polluted/2 & north_america > 1 ~ "North American/Atlantic")) %>% 
   filter(air_masses != "Southern Hemisphere",
          air_masses != "North American/Atlantic") %>%
-  rename(`Daytime~NO~(ppt)` = no_ppt,`Daytime~NO[2]~(ppt)` = no2_ppt,
+  rename(`Daytime~NO` = no_ppt,`Daytime~NO[2]` = no2_ppt,
          `Delta~O[3]~(ppb~d^{-1})` = delta_ozone_chem) %>% 
-  pivot_longer(c(`Daytime~NO~(ppt)`,`Daytime~NO[2]~(ppt)`,`Delta~O[3]~(ppb~d^{-1})`)) %>%
+  pivot_longer(c(`Daytime~NO`,`Daytime~NO[2]`)) %>%
   ggplot(aes(as.character(year),value,fill = air_masses)) +
   theme_bw() +
   geom_boxplot(outliers = F,varwidth =  T) +
@@ -764,11 +805,11 @@ dat_air_masses %>%
                                  vjust = 1,
                                  hjust = 1)) +
   labs(x = NULL,
-       y = NULL,
-       # y = expression(Daytime~NO[x]~mixing~ratio~(ppt)),
+       # y = NULL,
+       y = expression(Daytime~NO[x]~mixing~ratio~(ppt)),
        fill = NULL)
 
-ggsave("daytime_nox_delta_o3_air_mass_boxplot2012.png",
+ggsave("daytime_nox_air_mass_boxplot2012.png",
        path = "~/Writing/Thesis/Chapter 4 (NOx CVAO science)/Images",
        height = 20,
        width = 35,
@@ -826,7 +867,7 @@ ggsave("nox_shipping_emissions.png",
 
 # Reading in ro2 and ho2 ---------------------------------------------------
 
-box_modelled_ro2 = read.csv("output/data/box_modelled_radicals/CVAO_modelled_concs_RO2_10112021.csv") %>% 
+box_modelled_ro2 = read.csv("data/CVAO_modelled_concs_RO2_10112021.csv") %>% 
   clean_names()
 
 monthly_yearly_means_ro2 = box_modelled_ro2 %>% 
@@ -861,7 +902,7 @@ monthly_means_ro2 = box_modelled_ro2 %>%
   mutate(month = as.numeric(month)) %>%
   select(hour,month,ro2)
 
-box_modelled_ho2 = read.csv("output/data/box_modelled_radicals/CVAO_modelled_concs_HO2_10112021.csv") %>% 
+box_modelled_ho2 = read.csv("data/CVAO_modelled_concs_HO2_10112021.csv") %>% 
   clean_names()
 
 monthly_yearly_means_ho2 = box_modelled_ho2 %>% 
@@ -936,11 +977,11 @@ no2_pss = dat_for_pss %>%
          k_io = 7.15 * 10^-12 * exp(300/temp_k),
          k_bro = 8.7 * 10^-12 * exp(260/temp_k),
          o3_molecule_cm3 = ppt_to_molecules_cm3(o3_ppb * 1000),
-         no_ppt = ifelse(no_flag == 0 & between(hour,11,12),no_ppt,NA_real_),
-         no2_ppt = ifelse(no2_flag == 0 & between(hour,11,12),no2_ppt,NA_real_),
+         no_ppt = ifelse(no_flag == 0 & between(hour,11,15),no_ppt,NA_real_),
+         no2_ppt = ifelse(no2_flag == 0 & between(hour,11,15),no2_ppt,NA_real_),
          no_molecule_cm3 = ppt_to_molecules_cm3(no_ppt),
          no2_molecule_cm3 = ppt_to_molecules_cm3(no2_ppt),
-         no2_lifetime = (1/jno2)/60) %>% 
+         no2_lifetime = ifelse(between(hour,11,15),(1/jno2)/60,NA_real_)) %>% 
   mutate(no2_pss_ext = molecules_cm3_to_ppt(((o3_molecule_cm3*k+ro2*k_ro2+ho2*k_ho2+k_io*io_molecules+k_bro*bro_moelcules)*no_molecule_cm3)/jno2),
          no2_pss_simp = molecules_cm3_to_ppt(((o3_molecule_cm3*k)*no_molecule_cm3)/jno2),
          ratio = no2_ppt/no2_pss_ext,
@@ -949,7 +990,8 @@ no2_pss = dat_for_pss %>%
          year = year(date))
 
 no2_lifetime = no2_pss %>% 
-  filter(is.na(no2_lifetime) == F) %>% 
+  filter(is.na(no2_lifetime) == F,
+         between(hour,11,15)) %>% 
   mutate(lifetime_ten = no2_lifetime >= 10) %>% 
   count(lifetime_ten) %>% 
   mutate(percent = n/sum(n) *100)
@@ -958,7 +1000,8 @@ no2_lifetime = mean(no2_pss$no2_lifetime,na.rm = T)
 
 no2_pss_daily = no2_pss %>% 
   filter(no_ppt <= no2_ppt,
-         no2_lifetime <= 10) %>%
+         no2_lifetime <= 10,
+         between(hour,11,15)) %>%
   select(-c(no_flag,no_lod_ppt,no2_flag,no2_lod_ppt,jno2_calc:j_no2,k:no2_lifetime,leighton_ratio)) %>% 
   timeAverage("1 day") %>% 
   mutate(ocean = upwelling + north_atlantic + south_atlantic,
@@ -1022,13 +1065,13 @@ no2_pss_daily %>%
   geom_density(aes(fill = air_masses),alpha = 0.5) +
   geom_vline(aes(xintercept = 1),size = 0.8) +
   geom_segment(aes(x =  1.58, xend = 1.58,
-                   y = 0, yend = 0.68),size = 0.8, col = "goldenrod1") +
-  geom_segment(aes(x =  1.45, xend = 1.45,
-                   y = 0, yend = 0.7),size = 0.8, col = "darkolivegreen3") +
+                   y = 0, yend = 0.678),size = 0.8, col = "goldenrod1") +
+  geom_segment(aes(x =  1.47, xend = 1.47,
+                   y = 0, yend = 0.703),size = 0.8, col = "darkolivegreen3") +
   geom_segment(aes(x =  1.39, xend = 1.39,
-                   y = 0, yend = 0.51),size = 0.8, col = "springgreen4") +
+                   y = 0, yend = 0.497),size = 0.8, col = "springgreen4") +
   geom_segment(aes(x =  1.32, xend = 1.32,
-                   y = 0, yend = 0.465),size = 0.8, col = "navy") +
+                   y = 0, yend = 0.468),size = 0.8, col = "navy") +
   scale_fill_manual(values = c("goldenrod1","darkolivegreen3","springgreen4","navy")) +
   scale_x_continuous(breaks = c(0,1,2,3,4,5,6,7,8)) +
   theme(legend.position = "top",
@@ -1038,11 +1081,11 @@ no2_pss_daily %>%
        fill = NULL) +
   NULL
 
-# ggsave("no2_pss_ratio_pdf.png",
-#        path = "~/Writing/Thesis/Chapter 4 (NOx CVAO science)/Images",
-#        height = 15,
-#        width = 30,
-#        units = "cm")
+ggsave("no2_pss_ratio_pdf.png",
+       path = "~/Writing/Thesis/Chapter 4 (NOx CVAO science)/Images",
+       height = 15,
+       width = 30,
+       units = "cm")
 
 # no2 ratio boxplot -------------------------------------------------------
 
@@ -1098,21 +1141,27 @@ ggsave("no2_ratio_co.png",
 
 no2_pss_daily %>% 
   filter(is.na(year) == F) %>% 
-  mutate(jno2 = jno2 * 10^2) %>% 
+  mutate(jno2 = jno2 * 10^2,
+         ethane = ethane/10^3) %>% 
   rename(`j[NO[2]]~(10^{-2}~s^{-1})` = jno2,
          `NO~(ppt)` = no_ppt,
          `NO[2~Obs]~(ppt)` = no2_ppt,
          `NO[2~PSS]~(ppt)` = no2_pss_ext,
          `O[3]~(ppb)` = o3_ppb,
-         `NO[2~Obs]/NO[2~PSS]` = ratio) %>%  
+         `NO[2~Obs]/NO[2~PSS]` = ratio,
+         `CO~(ppb)` = co_ppb,
+         `Acetylene~(ppt)` = acetylene,
+         `Ethane~(ppb)` = ethane) %>%  
   pivot_longer(c(`j[NO[2]]~(10^{-2}~s^{-1})`,`O[3]~(ppb)`,`NO~(ppt)`,`NO[2~Obs]~(ppt)`,`NO[2~PSS]~(ppt)`,
-                 `NO[2~Obs]/NO[2~PSS]`)) %>% 
+                 `NO[2~Obs]/NO[2~PSS]`,`CO~(ppb)`,`Acetylene~(ppt)`,`Ethane~(ppb)`)) %>% 
   mutate(year = as.character(year),
-         name = fct_relevel(name,"j[NO[2]]~(10^{-2}~s^{-1})","O[3]~(ppb)","NO~(ppt)",
-                            "NO[2~Obs]~(ppt)","NO[2~PSS]~(ppt)","NO[2~Obs]/NO[2~PSS]")
-         ) %>% 
+         name = fct_relevel(name,"CO~(ppb)","Ethane~(ppb)","Acetylene~(ppt)",
+                            "j[NO[2]]~(10^{-2}~s^{-1})","O[3]~(ppb)","NO~(ppt)","NO[2~Obs]~(ppt)",
+                            "NO[2~PSS]~(ppt)","NO[2~Obs]/NO[2~PSS]")) %>%
   ggplot(aes(year,value,fill = name)) +
-  scale_fill_manual(values = c("darkred","darkorange","goldenrod1","darkolivegreen3","springgreen4","steelblue1")) +
+  scale_fill_manual(values = c("darkorange","goldenrod1","lightgoldenrod1",
+                               "darkgreen","springgreen4","darkolivegreen3",
+                               "royalblue","steelblue1","lightblue")) +
   geom_boxplot(outliers = F) +
   theme_bw() +
   facet_wrap(~name,scales = "free_y",labeller = label_parsed) +
@@ -1127,7 +1176,7 @@ no2_pss_daily %>%
 
 ggsave("boxplot_ratio_species.png",
        path = "~/Writing/Thesis/Chapter 4 (NOx CVAO science)/Images",
-       height = 15,
+       height = 17,
        width = 30,
        units = "cm")
   
@@ -1193,15 +1242,37 @@ dat_air_masses %>%
          doy = yday(date),
          month = month(date),
          NO = ifelse(no_flag <= 0, no_ppt,NA_real_),
-         NO2 = ifelse(no2_flag <= 0 & date >= "2017-01-01", no2_ppt,NA_real_)) %>% 
-  timeAverage(avg.time = "1 month") %>%
-  rename(`NO[2]~(ppt)` = NO2,
-         `NO~(ppt)` = NO,
-         `Sensitivity~(cps~ppt^{-1})` = SENS) %>% 
+         no_u_ppt = ifelse(no_flag > 0 | no_u_ppt > 10,NA_real_,no_u_ppt),
+         NO2 = ifelse(no2_flag <= 0 & date >= "2017-01-01", no2_ppt,NA_real_),
+         no2_u_ppt = ifelse(no2_flag > 0,NA_real_,NO2)) %>% 
+  group_by(month,year) %>% 
+  summarise(across(c(NO,NO2,SENS,no_u_ppt,no2_u_ppt),
+                   list(mean = ~mean(.,na.rm = T),
+                        se = ~sd(., na.rm = TRUE) / sqrt(length(.)),
+                        sd = ~sd(.,na.rm=T)))) %>% 
+  mutate(date = as.POSIXct(paste0(year, "-",month, "-01"), 
+                           format = "%Y-%m-%d",
+                           tz = "UTC"),
+         NO_max = NO_mean + no_u_ppt_mean,
+         NO_min = NO_mean - no_u_ppt_mean,
+         NO2_max = NO2_mean + no2_u_ppt_mean,
+         NO2_min = NO2_mean - no2_u_ppt_mean,
+         SENS_max = SENS_mean + SENS_sd,
+         SENS_min = SENS_mean - SENS_sd) %>% 
+  rename(`NO[2]~(ppt)` = NO2_mean,
+         `NO~(ppt)` = NO_mean,
+         `Sensitivity~(cps~ppt^{-1})` = SENS_mean) %>% 
   pivot_longer(c(`NO[2]~(ppt)`,`NO~(ppt)`,`Sensitivity~(cps~ppt^{-1})`)) %>%
-  mutate(name = fct_relevel(name,"NO~(ppt)","NO[2]~(ppt)","Sensitivity~(cps~ppt^{-1})")) %>% 
-  ggplot(aes(date,value,col = name)) +
-  geom_point() +
+  pivot_longer(cols = c(NO_max,NO2_max,SENS_max),values_to = "max_err_v",names_to = "max_err_n") %>%
+  pivot_longer(cols = c(NO_min,NO2_min,SENS_min),values_to = "min_err_v",names_to = "min_err_n") %>%
+  mutate(flag = case_when(name == "NO~(ppt)" & min_err_n == "NO_min" & max_err_n == "NO_max" ~ "NO",
+                          name == "NO[2]~(ppt)" & min_err_n == "NO2_min" & max_err_n == "NO2_max" ~ "NO2",
+                          name == "Sensitivity~(cps~ppt^{-1})" & min_err_n == "SENS_min" & max_err_n == "SENS_max" ~ "SENS")) %>%
+  filter(is.na(flag) == F) %>%
+  mutate(name = fct_relevel(name,"NO~(ppt)","NO[2]~(ppt)","Sensitivity~(cps~ppt^{-1})")) %>%
+  ggplot() +
+  geom_point(aes(date,value,col = name)) +
+  geom_linerange(aes(date,ymin = min_err_v,ymax = max_err_v,col = name)) +
   geom_vline(xintercept = c(as.POSIXct("2012-05-01"),as.POSIXct("2017-03-01"),as.POSIXct("2019-11-19"),
                             as.POSIXct("2020-06-11")),
              linewidth = 1,linetype = "dashed",show.legend = TRUE) +
@@ -1245,3 +1316,205 @@ kOH %>%
   pivot_longer(c(-date)) %>% 
   ggplot(aes(date,value,col = name)) +
   geom_path()
+
+
+# Feb 2023 measured/modelled comparison -----------------------------------------------------
+
+rox_feb23 = read.csv("data/ROx.csv") %>% 
+  mutate(date = dmy_hm(Time)) %>% 
+  select(date,HO2:Rox) %>% 
+  timeAverage("1 hour")
+
+measured_rox_diurnals = rox_feb23 %>% 
+  mutate(hour = hour(date)) %>% 
+  group_by(hour) %>% 
+  summarise(across(c(HO2,RO2),
+                   list(mean = ~mean(.,na.rm = T),se = ~sd(., na.rm = TRUE) / sqrt(length(.)))))
+
+box_modelled_ro2 = read.csv("data/CVAO_modelled_concs_RO2_10112021.csv") %>% 
+  clean_names() %>% 
+  select(hour,ro2_mod_feb18 = february_2018,ro2_mod_feb20 = february_2020)
+
+box_modelled_ho2 = read.csv("data/CVAO_modelled_concs_HO2_10112021.csv") %>% 
+  clean_names() %>% 
+  select(hour,ho2_mod_feb18 = february_2018,ho2_mod_feb20 = february_2020)
+
+rox_diurnals = measured_rox_diurnals %>% 
+  left_join(box_modelled_ro2,by = "hour") %>% 
+  left_join(box_modelled_ho2,by = "hour")
+
+rox_diurnals %>% 
+  mutate(ro2_max = (RO2_mean + RO2_se)/10^8,
+         ro2_min = (RO2_mean - RO2_se)/10^8,
+         ho2_max = (HO2_mean + HO2_se)/10^8,
+         ho2_min = (HO2_mean - HO2_se)/10^8) %>% 
+  rename(`Measured (2023)` = RO2_mean,
+         `Modelled (2018)` = ro2_mod_feb18,
+         `Modelled (2020)` = ro2_mod_feb20) %>% 
+  pivot_longer(c(`Measured (2023)`,`Modelled (2018)`,`Modelled (2020)`)) %>% 
+  mutate(value = value /10^8,
+         facet = "HO[2]") %>% 
+  ggplot() +
+  theme_bw() +
+  geom_path(aes(hour,value,col = name),linewidth = 1) +
+  geom_ribbon(aes(hour,ymin = ro2_min,ymax = ro2_max),alpha = 0.3,fill = "darkorange") +
+  scale_colour_manual(values = c("darkorange","steelblue1","navy")) +
+  # scale_fill_manual(values = c("darkorange","steelblue1")) +
+  facet_wrap(~facet,labeller=label_parsed) +
+  labs(x = "Hour of day",
+       y = expression (RO[2]~(10^8~molecules~cm^{-3})),
+       col = NULL,fill = NULL) +
+  theme(legend.position = "top",
+        text = element_text(size = 20)) +
+  scale_x_continuous(breaks = c(0,4,8,12,16,20))
+
+# ggsave("ro2_modelled_measured.png",
+#        path = "~/Writing/Thesis/Chapter 4 (NOx CVAO science)/Images/cheating",
+#        height = 17,
+#        width = 18,
+#        units = "cm")
+
+
+# PSS with measured ROx ---------------------------------------------------
+
+pss_measured_rox = dat_for_pss %>% 
+  rename(ro2_modelled = ro2,ho2_modelled = ho2) %>% 
+  # select(date,no_ppt,no_flag,no2_ppt,no2_flag,ethane:isoprene,o3_ppb,co_ppb,jno2,air_masses,
+  #        ro2_modelled,ho2_modelled,temp_10m_deg_c) %>% 
+  filter(date >= "2023-02-05" & date<= "2023-02-26") %>% 
+  left_join(rox_feb23,by = "date")
+
+no2_pss_feb23 = pss_measured_rox %>% 
+  mutate(month = month(date),
+         hour = hour(date)) %>% 
+  mutate(temp_k = ifelse(is.na(temp_10m_deg_c),298.15,temp_10m_deg_c + 273.15),
+         k = 2.07 * 10^-12 * exp(-1400/temp_k),
+         k_ro2 = 2.3 * 10^-12 * exp(360/temp_k),
+         k_ho2 = 3.45 * 10^-12 * exp(270/temp_k),
+         k_io = 7.15 * 10^-12 * exp(300/temp_k),
+         k_bro = 8.7 * 10^-12 * exp(260/temp_k),
+         o3_molecule_cm3 = ppt_to_molecules_cm3(o3_ppb * 1000),
+         no_ppt = ifelse(no_flag == 0 & between(hour,11,15),no_ppt,NA_real_),
+         no2_ppt = ifelse(no2_flag == 0 & between(hour,11,15),no2_ppt,NA_real_),
+         no_molecule_cm3 = ppt_to_molecules_cm3(no_ppt),
+         no2_molecule_cm3 = ppt_to_molecules_cm3(no2_ppt),
+         no2_lifetime = (1/jno2)/60) %>% 
+  mutate(no2_pss_mod = molecules_cm3_to_ppt(((o3_molecule_cm3*k+ro2_modelled*k_ro2+ho2_modelled*k_ho2+k_io*io_molecules+k_bro*bro_moelcules)*no_molecule_cm3)/jno2),
+         no2_pss_meas = molecules_cm3_to_ppt(((o3_molecule_cm3*k+RO2*k_ro2+HO2*k_ho2+k_io*io_molecules+k_bro*bro_moelcules)*no_molecule_cm3)/jno2),
+         ratio_mod = no2_ppt/no2_pss_mod,
+         ratio_meas = no2_ppt/no2_pss_meas,
+         ro2_pss = (jno2*no2_molecule_cm3-(k*o3_molecule_cm3+k_ho2*ho2_modelled+k_io*io_molecules+k_bro*bro_moelcules))/(k_ro2*no_molecule_cm3)) %>% 
+  filter(between(hour,11,15)) %>% 
+  timeAverage("1 day")
+
+mean_values = no2_pss_feb23 %>% 
+  select(date,no_ppt,no2_ppt,ro2_modelled,ho2_modelled,HO2,RO2,no2_pss_mod,no2_pss_meas,ratio_mod,ratio_meas,rox_pss) %>% 
+  mutate(nmb_ho2 = NormalisedMeanBias(ho2_modelled,HO2,na.rm = T),
+         nmb_ro2 = NormalisedMeanBias(ro2_modelled,RO2,na.rm = T)) %>% 
+  summarise(across(c(HO2,RO2,ho2_modelled,ro2_modelled,nmb_ho2,nmb_ro2,rox_pss),~mean(.x,na.rm = T)))
+
+plotting = no2_pss_feb23 %>% 
+  select(date,HO2,RO2,no2_ppt,no2_pss_meas,no2_pss_mod,ratio_mod,ratio_meas,ho2_modelled,ro2_modelled) %>% 
+  rename(`NO[2]~(ppt)` = no2_pss_meas,
+         # `HO[2]` = HO2,
+         # `RO[2]` = RO2,
+         `NO[2~Obs]/NO[2~PSS]` = ratio_meas) %>% 
+  pivot_longer(c(`NO[2]~(ppt)`,`NO[2~Obs]/NO[2~PSS]`),
+               names_to = "measured_names",values_to = "Measured") %>% 
+  rename(`NO[2]~(ppt)` = no2_pss_mod,
+         # `HO[2]` = HO2,
+         # `RO[2]` = RO2,
+         `NO[2~Obs]/NO[2~PSS]` = ratio_mod) %>% 
+  pivot_longer(c(`NO[2]~(ppt)`,`NO[2~Obs]/NO[2~PSS]`),
+               names_to = "modelled_names",values_to = "Modelled") %>% 
+  filter(measured_names == modelled_names) %>% 
+  mutate(modelled_names = fct_relevel(modelled_names,"NO[2]~(ppt)","NO[2~Obs]/NO[2~PSS]")) %>%
+  pivot_longer(c(Measured,Modelled,no2_ppt)) %>% 
+  mutate(value = ifelse(name == "no2_ppt" & modelled_names == "NO[2~Obs]/NO[2~PSS]",NA_real_,value))
+
+plotting %>% 
+  ggplot(aes(date,value,col = name)) +
+  geom_hline(data = plotting %>% filter(modelled_names == "NO[2~Obs]/NO[2~PSS]"),
+             aes(yintercept = 1),linetype = "dashed",linewidth = 0.8) +
+  theme_bw() +
+  geom_point(size = 3) +
+  facet_grid(rows = vars(modelled_names),scales = "free_y",labeller = label_parsed) +
+  theme(legend.position = "top",
+        text = element_text(size = 20)) +
+  labs(x = NULL,
+       y = NULL,
+       col = NULL) +
+  scale_colour_manual(values = c("steelblue1","navy","darkorange"),
+                      label = c(expression(PSS~with~measured~HO[2]~and~RO[2]),
+                                expression(PSS~with~modelled~HO[2]~and~RO[2]),
+                                expression(NO[2~Obs]))) +
+  scale_x_datetime(date_breaks = "2 day",date_labels = "%d %b")
+
+# ggsave("no2_pss_modelled_vs_measured_peroxy.png",
+#        path = "~/Writing/Thesis/Chapter 4 (NOx CVAO science)/Images",
+#        height = 15,
+#        width = 30,
+#        units = "cm")
+
+
+# Changes between Feb 2018 and Feb 2020 leading to lower RO2 in 2018 --------
+
+spec_rad_dat = read.csv("~/Cape Verde/20240507_CV_merge.csv") %>% 
+  clean_names() %>% 
+  mutate(date = dmy_hm(date),
+         date = round_date(date, "1 hour")) %>% 
+  mutate(month = month(date),
+         year = year(date)) %>% 
+  filter(month == 2,
+         year == 2018 | year == 2020) %>% 
+  select(date,jhono_calc:j_oio)
+
+spec_rad_feb23 = read.csv("data/Specrad_hour_Feb23_with_calc.csv") %>% 
+  clean_names() %>% 
+  mutate(date = dmy_hm(date),
+         jno2 = ifelse(is.na(j_no2),jno2_calc,j_no2),
+         jo1d = ifelse(is.na(j_o1d),jo1d_calc,j_o1d)) %>% 
+  filter(is.na(date) == F) %>% 
+  select(date,jno2,jo1d)
+
+spec_rad_feb = spec_rad_dat %>% 
+  mutate(jno2 = ifelse(is.na(j_no2),jno2_calc,j_no2),
+         jo1d = ifelse(is.na(j_o1d),jo1d_calc,j_o1d)) %>% 
+  select(-c(j_no2,j_o1d,jno2_calc,jo1d_calc)) %>% 
+  bind_rows(spec_rad_feb23) %>% 
+  mutate(month = month(date),
+         year = year(date)) %>% 
+  filter(month == 2,
+         year == 2018 | year == 2020 |year == 2023)
+  
+#comparison between feb 2018, feb 2020 and feb 2023
+
+feb_dat = dat %>% 
+  mutate(month = month(date),
+         year = year(date),
+         no_ppt = ifelse(no_flag == 0,no_ppt,NA_real_),
+         no2_ppt = ifelse(no2_flag == 0,no2_ppt,NA_real_)) %>% 
+  filter(month == 2,
+         year == 2018 | year == 2020 | year == 2023) %>% 
+  select(date,year,no_ppt,no2_ppt,ethane:isoprene,o3_ppb,co_ppb,ch4_all_ppb_v,co2_all_ppm_v) %>% 
+  left_join(by = "date",spec_rad_feb)
+
+feb_dat_diurnals = feb_dat %>% 
+  mutate(hour = hour(date)) %>% 
+  group_by(year,hour) %>% 
+  summarise(across(-date,~mean(.,na.rm = T))) %>% 
+  left_join(rox_diurnals,by = "hour") %>% 
+  mutate(ro2 = case_when(year == 2018 ~ ro2_mod_feb18,
+                         year == 2020 ~ ro2_mod_feb20,
+                         year == 2023 ~ RO2_mean),
+         ho2 = case_when(year == 2018 ~ ho2_mod_feb18,
+                         year == 2020 ~ ho2_mod_feb20,
+                         year == 2023 ~ HO2_mean)) %>% 
+  select(-c(HO2_mean:ho2_mod_feb20,month))
+
+feb_dat_diurnals %>% 
+  filter(is.na(year) == F) %>% 
+  pivot_longer(c(no_ppt,no2_ppt,ro2,ho2,o3_ppb,jo1d,jno2)) %>% 
+  ggplot(aes(hour,value,col = as.character(year))) +
+  geom_path() +
+  facet_wrap(~name,scales = "free_y")
